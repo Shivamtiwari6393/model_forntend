@@ -4,20 +4,35 @@ import { Camera } from "@mediapipe/camera_utils";
 import "./ImageUpload.css";
 
 const ImageUpload = () => {
-  const [idleSeconds, setIdleSeconds] = useState(0);
+  const previewRef = useRef(null);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const cropRef = useRef({ x: 10, y: 10 }); 
+  const cropRef = useRef({ x: 10, y: 10 });
   const [predictedText, setPredictedText] = useState("");
   const [isPredicting, setIsPredicting] = useState(false);
   const lastPrediction = useRef("");
   const handPresent = useRef(false);
   const lastHandDetectedTime = useRef(Date.now());
-  const spaceAdded = useRef(false); 
+  const spaceAdded = useRef(false);
 
-  const url = "https://uvicorn-server.onrender.com"
-  // const url = "http://127.0.0.1:8000"
+  const url = "https://uvicorn-server.onrender.com";
+  // const url = "http://127.0.0.1:8000";
+
+  // toggle prediction
+
+  const handleToggle = () => {
+    setIsPredicting((prev) => !prev);
+  };
+
+  // clear predicted text
+  const handleClear = () => {
+    setPredictedText("");
+    lastPrediction.current = "";
+    spaceAdded.current = false;
+  };
+
+  // setting up
 
   useEffect(() => {
     const video = videoRef.current;
@@ -81,24 +96,18 @@ const ImageUpload = () => {
     camera.start();
   }, []);
 
+  // send image at 2s interval
+
   useEffect(() => {
+    if (!isPredicting) return;
+
     const interval = setInterval(sendImage, 2000);
     return () => clearInterval(interval);
   }, [isPredicting]);
 
+  // send image
   const sendImage = async () => {
-    if (!isPredicting) return;
-    const now = Date.now();
-    if (
-      !handPresent.current &&
-      now - lastHandDetectedTime.current > 3000 &&
-      !spaceAdded.current
-    ) {
-      setPredictedText((prev) => prev + " ");
-      spaceAdded.current = true;
-    }
-
-    if (!handPresent.current) return;
+    if (!isPredicting || !handPresent.current) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
@@ -109,19 +118,30 @@ const ImageUpload = () => {
 
     const croppedImage = ctx.getImageData(x, y, width, height);
 
-    const tempCanvas = document.createElement("canvas");
-    tempCanvas.width = width;
-    tempCanvas.height = height;
-    const tempCtx = tempCanvas.getContext("2d");
-    tempCtx.putImageData(croppedImage, 0, 0);
+    const previewCanvas = previewRef.current;
+    const previewCtx = previewCanvas.getContext("2d");
+    previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+    previewCtx.drawImage(
+      canvas,
+      x,
+      y,
+      width,
+      height,
+      0,
+      0,
+      previewCanvas.width,
+      previewCanvas.height
+    );
 
-    const base64Img = tempCanvas.toDataURL("image/jpeg");
+    const offCanvas = new OffscreenCanvas(width, height);
+    const offCtx = offCanvas.getContext("2d");
+    offCtx.putImageData(croppedImage, 0, 0);
+
+    const blob = await offCanvas.convertToBlob({ type: "image/jpeg" });
 
     try {
       const formData = new FormData();
-      const blob = await (await fetch(base64Img)).blob();
       formData.append("image", blob, "hand.jpg");
-
 
       const res = await fetch(`${url}/predict/`, {
         method: "POST",
@@ -139,43 +159,20 @@ const ImageUpload = () => {
       console.error("Prediction error:", err);
     }
   };
-  useEffect(() => {
-    const idleTimer = setInterval(() => {
-      if (!handPresent.current) {
-        const secondsPassed = Math.floor(
-          (Date.now() - lastHandDetectedTime.current) / 1000
-        );
-        setIdleSeconds(secondsPassed);
-
-        if (secondsPassed >= 3 && !spaceAdded.current) {
-          setPredictedText((prev) => prev + " ");
-          spaceAdded.current = true;
-        }
-      } else {
-        setIdleSeconds(0);
-      }
-    }, 1000);
-
-    return () => clearInterval(idleTimer);
-  }, []);
-
-  const handleToggle = () => {
-    setIsPredicting((prev) => !prev);
-  };
-
-  const handleClear = () => {
-    setPredictedText("");
-    lastPrediction.current = "";
-    spaceAdded.current = false;
-  };
 
   return (
     <div className="upload-container">
-      <div className="top-left-controls">
-        <button onClick={handleToggle} className="send-button">
+      <canvas
+        width="100"
+        height="100"
+        ref={previewRef}
+      />
+
+      <div className="controls">
+        <button onClick={handleToggle} className="start-button">
           {isPredicting ? "Stop" : "Start"}
         </button>
-        <button onClick={handleClear} className="send-button clear">
+        <button onClick={handleClear} className="clear-button">
           Clear
         </button>
       </div>
@@ -198,14 +195,10 @@ const ImageUpload = () => {
       />
 
       <div className="output-text-box">
-        <h3>Predicted Output:</h3>
+        <h4>Predicted Output:</h4>
         <div className="scrollable-text">{predictedText || "..."}</div>
         <div className="idle-timer">
-          {handPresent.current
-            ? "Hand detected"
-            : idleSeconds < 3
-            ? `Waiting... (${3 - idleSeconds}s left to insert space)`
-            : "Space inserted"}
+          {handPresent.current ? "Hand detected" : ""}
         </div>
       </div>
     </div>
